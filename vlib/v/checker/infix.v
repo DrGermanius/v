@@ -24,7 +24,6 @@ fn (mut c Checker) infix_expr(mut node ast.InfixExpr) ast.Type {
 					to_type := c.expr(left_node.right.right)
 					c.autocast_in_if_conds(mut node.right, left_node.right.left, from_type,
 						to_type)
-					break
 				}
 			}
 			if left_node.op == .key_is {
@@ -244,14 +243,14 @@ fn (mut c Checker) infix_expr(mut node ast.InfixExpr) ast.Type {
 			left_sym = c.table.sym(unwrapped_left_type)
 			unwrapped_right_type := c.unwrap_generic(right_type)
 			right_sym = c.table.sym(unwrapped_right_type)
-			if mut right_sym.info is ast.Alias && (right_sym.info as ast.Alias).language != .c
+			if mut right_sym.info is ast.Alias && right_sym.info.language != .c
 				&& c.mod == c.table.type_to_str(unwrapped_right_type).split('.')[0]
-				&& c.table.sym((right_sym.info as ast.Alias).parent_type).is_primitive() {
+				&& c.table.sym(right_sym.info.parent_type).is_primitive() {
 				right_sym = c.table.sym(right_sym.info.parent_type)
 			}
-			if mut left_sym.info is ast.Alias && (left_sym.info as ast.Alias).language != .c
+			if mut left_sym.info is ast.Alias && left_sym.info.language != .c
 				&& c.mod == c.table.type_to_str(unwrapped_left_type).split('.')[0]
-				&& c.table.sym((left_sym.info as ast.Alias).parent_type).is_primitive() {
+				&& c.table.sym(left_sym.info.parent_type).is_primitive() {
 				left_sym = c.table.sym(left_sym.info.parent_type)
 			}
 
@@ -260,7 +259,7 @@ fn (mut c Checker) infix_expr(mut node ast.InfixExpr) ast.Type {
 				&& unwrapped_right_type.is_any_kind_of_pointer() {
 				return_type = left_type
 			} else if !c.pref.translated && left_sym.info is ast.Alias
-				&& !(c.table.sym((left_sym.info as ast.Alias).parent_type).is_primitive()) {
+				&& !(c.table.sym(left_sym.info.parent_type).is_primitive()) {
 				if left_sym.has_method(node.op.str()) {
 					if method := left_sym.find_method(node.op.str()) {
 						return_type = method.return_type
@@ -285,7 +284,7 @@ fn (mut c Checker) infix_expr(mut node ast.InfixExpr) ast.Type {
 					}
 				}
 			} else if !c.pref.translated && right_sym.info is ast.Alias
-				&& !(c.table.sym((right_sym.info as ast.Alias).parent_type).is_primitive()) {
+				&& !(c.table.sym(right_sym.info.parent_type).is_primitive()) {
 				if right_sym.has_method(node.op.str()) {
 					if method := right_sym.find_method(node.op.str()) {
 						return_type = method.return_type
@@ -500,7 +499,7 @@ fn (mut c Checker) infix_expr(mut node ast.InfixExpr) ast.Type {
 					c.error('array append cannot be used in an expression', node.pos)
 				}
 				if left_type.has_flag(.option) && node.left is ast.Ident
-					&& (node.left as ast.Ident).or_expr.kind == .absent {
+					&& node.left.or_expr.kind == .absent {
 					c.error('unwrapped Option cannot be used in an infix expression',
 						node.pos)
 				}
@@ -744,6 +743,14 @@ fn (mut c Checker) infix_expr(mut node ast.InfixExpr) ast.Type {
 
 	// Dual sides check (compatibility check)
 	if node.left !is ast.ComptimeCall && node.right !is ast.ComptimeCall {
+		if left_type.has_flag(.generic) {
+			left_type = c.unwrap_generic(left_type)
+			left_sym = c.table.sym(left_type)
+		}
+		if right_type.has_flag(.generic) {
+			right_type = c.unwrap_generic(right_type)
+			right_sym = c.table.sym(right_type)
+		}
 		if !(c.symmetric_check(left_type, right_type) && c.symmetric_check(right_type, left_type))
 			&& !c.pref.translated && !c.file.is_translated && !node.left.is_auto_deref_var()
 			&& !node.right.is_auto_deref_var() {
@@ -824,6 +831,15 @@ fn (mut c Checker) invalid_operator_error(op token.Kind, left_type ast.Type, rig
 
 // `if node is ast.Ident && node.is_mut { ... }` -> `if node is ast.Ident && (node as ast.Ident).is_mut { ... }`
 fn (mut c Checker) autocast_in_if_conds(mut right ast.Expr, from_expr ast.Expr, from_type ast.Type, to_type ast.Type) {
+	if '${right}' == from_expr.str() {
+		right = ast.AsCast{
+			typ: to_type
+			expr: from_expr
+			expr_type: from_type
+		}
+		return
+	}
+
 	match mut right {
 		ast.SelectorExpr {
 			if right.expr.str() == from_expr.str() {
@@ -855,7 +871,9 @@ fn (mut c Checker) autocast_in_if_conds(mut right ast.Expr, from_expr ast.Expr, 
 					}
 				}
 			}
-			c.autocast_in_if_conds(mut right.left, from_expr, from_type, to_type)
+			if right.left !is ast.Ident {
+				c.autocast_in_if_conds(mut right.left, from_expr, from_type, to_type)
+			}
 			for mut arg in right.args {
 				c.autocast_in_if_conds(mut arg.expr, from_expr, from_type, to_type)
 			}
